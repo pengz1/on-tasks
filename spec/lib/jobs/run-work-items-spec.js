@@ -3,7 +3,7 @@
 
 'use strict';
 
-describe.only("Job.Catalog.RunWorkItem", function () {
+describe("Job.Catalog.RunWorkItem", function () {
     var waterline = {};
     var taskProtocol = {};
     var RunWorkItems;
