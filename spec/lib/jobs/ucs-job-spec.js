@@ -1,8 +1,10 @@
+// Copyright 2017, Dell EMC, Inc.
+
 'use strict';
 
 var uuid = require('node-uuid'),
-    // events = require('events'),
     waterline = {},
+    encrypt = {},
     sandbox = sinon.sandbox.create(),
     ucsJob,
     ucsTool,
@@ -15,7 +17,8 @@ var uuid = require('node-uuid'),
     },
     obmConfig = {
         config: {
-            dn: 'sys/chassis-1/blade-2'
+            dn: 'sys/chassis-1/blade-2',
+            ucsPassword: 'abc'
         }
     },
     ucsResponseData = {
@@ -53,6 +56,7 @@ describe('Job.Ucs', function() {
             helper.require('/lib/jobs/base-job.js'),
             helper.require('/lib/jobs/ucs-job.js'),
             helper.require('/lib/utils/job-utils/ucs-tool.js'),
+            helper.di.simpleWrapper(encrypt, 'Services.Encryption'),
             helper.di.simpleWrapper(waterline, 'Services.Waterline')
         ]);
         context.Jobclass = helper.injector.get('Job.Ucs');
@@ -63,8 +67,8 @@ describe('Job.Ucs', function() {
     });
 
     describe('ucs-job', function() {
-        // var testEmitter = new events.EventEmitter();
         beforeEach(function() {
+            encrypt.decrypt = sandbox.stub().returns('abc');
             waterline.workitems = {
                 update: sandbox.stub().resolves(),
                 findOne: sandbox.stub().resolves(),
@@ -90,34 +94,60 @@ describe('Job.Ucs', function() {
         });
 
         afterEach(function() {
-            sandbox.reset();
+            sandbox.restore();
         });
 
-        it("should invoke ucsTool.clientRequest function to get ucs data from service.",
-            function() {
-                return ucsJob._subscribeUcsCallback(data)
-                    .then(function() {
-                        expect(ucsTool.clientRequest).to.have.been.calledOnce;
-                    });
+        it("should invoke ucsTool.clientRequest function to get ucs data.", function() {
+            return ucsJob._subscribeUcsCallback(data)
+            .then(function() {
+                expect(waterline.obms.findByNode).to.have.been.calledOnce;
+                expect(ucsTool.clientRequest).to.have.been.calledOnce;
+                expect(ucsJob._publishUcsCommandResult).to.have.been.calledOnce;
+                expect(waterline.workitems.findOne).to.have.been.calledOnce;
+                expect(waterline.workitems.setSucceeded).to.have.been.calledOnce;
             });
+        });
+
+        it("should log error if no obm service is found.", function() {
+            waterline.obms.findByNode.resolves();
+            return ucsJob._subscribeUcsCallback(data)
+            .then(function() {
+                expect(ucsTool.clientRequest).to.have.not.been.calledOnce;
+            });
+        });
+
+        it("should log error if no class id is found.", function() {
+            waterline.obms.findByNode.resolves();
+            return ucsJob._collectUcsPollerData({command: 'anything'})
+            .then(
+                function(){
+                    throw new Error('Test should fail');
+                }, 
+                function(err) {
+                    expect(ucsTool.clientRequest).to.have.not.been.calledOnce;
+                    expect(err.message).to.equal('No ucs classIds found for command anything');
+                }
+            );
+        });
 
         it("should reach upper limit of concurrent request pool and cannot add new one.",
             function() {
-                var spy = sandbox.spy(ucsJob, 'addConcurrentRequest');
-                ucsJob.maxConcurrent = -1;
-                return ucsJob._subscribeUcsCallback(data)
-                    .then(function() {
-                        expect(spy).to.have.not.been.called;
-                    });
+            var addConcurrentRequestSpy = sandbox.spy(ucsJob, 'addConcurrentRequest');
+            ucsJob.maxConcurrent = -1;
+            return ucsJob._subscribeUcsCallback(data)
+            .then(function() {
+                expect(addConcurrentRequestSpy).to.have.not.been.called;
+                expect(waterline.obms.findByNode).to.have.not.been.called;
             });
+        });
 
         it("should listen for ucs.powerthermal command requests", function() {
             ucsJob._subscribeUcsCommand = sandbox.stub();
             return ucsJob._run()
-                .then(function() {
-                    expect(waterline.workitems.update).to.have.been.calledOnce;
-                    expect(ucsJob._subscribeUcsCommand).to.have.been.calledOnce;
-                });
+            .then(function() {
+                expect(waterline.workitems.update).to.have.been.calledOnce;
+                expect(ucsJob._subscribeUcsCommand).to.have.been.calledOnce;
+            });
         });
 
         it("should not be allowed to exceed the concurrent of maximum limit.", function() {
